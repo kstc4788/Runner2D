@@ -1,5 +1,6 @@
 ﻿package com.example.runner2d
 
+import android.app.Activity
 import android.content.Context
 import android.media.AudioManager
 import android.media.ToneGenerator
@@ -139,12 +140,16 @@ private fun circleIntersectsRect(cx: Float, cy: Float, radius: Float, rect: Rect
 @Composable
 fun GameScreen() {
     val context = LocalContext.current
+    val activity = context as? Activity
     val prefs = remember { context.getSharedPreferences("runner2d_prefs", Context.MODE_PRIVATE) }
+    val adsManager = remember(context) { RunnerAdsManager(context) }
     val tone = remember { ToneGenerator(AudioManager.STREAM_MUSIC, 80) }
 
     var audioEnabled by remember { mutableStateOf(prefs.getBoolean("audio_enabled", true)) }
     var hapticsEnabled by remember { mutableStateOf(prefs.getBoolean("haptics_enabled", true)) }
     var dailyProgress by remember { mutableStateOf(loadDailyProgress(prefs)) }
+    var completedRuns by remember { mutableIntStateOf(prefs.getInt("completed_runs", 0)) }
+    var usedSecondChanceThisRun by remember { mutableStateOf(false) }
 
     val missionScoreTarget = 120
     val missionJumpsTarget = 25
@@ -174,8 +179,13 @@ fun GameScreen() {
         onDispose { tone.release() }
     }
 
+    LaunchedEffect(Unit) {
+        adsManager.preloadAll()
+    }
+
     val groundHeightPx = with(LocalDensity.current) { 100.dp.toPx() }
     val playerSize = with(LocalDensity.current) { 48.dp.toPx() }
+    val bannerTapGuardPx = with(LocalDensity.current) { 80.dp.toPx() }
 
     var canvasWidth by remember { mutableFloatStateOf(0f) }
     var canvasHeight by remember { mutableFloatStateOf(0f) }
@@ -223,6 +233,16 @@ fun GameScreen() {
         )
     }
 
+    fun continueAfterReward() {
+        gameOver = false
+        isPaused = false
+        usedSecondChanceThisRun = true
+        shieldTimer = max(shieldTimer, 2.5f)
+        val playerFrontX = canvasWidth * 0.2f + playerSize + 40f
+        obstacles.removeAll { it.x < playerFrontX }
+        playTone(ToneGenerator.TONE_PROP_ACK, 80)
+    }
+
     fun resetGame() {
         refreshDailyIfNeeded()
         obstacles.clear()
@@ -246,15 +266,32 @@ fun GameScreen() {
         shieldTimer = 0f
         slowMoTimer = 0f
         doubleJumpTimer = 0f
+        usedSecondChanceThisRun = false
     }
+
+    val showStaticOverlay = !started || isPaused || gameOver
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF0E1C2F))
-            .pointerInput(gameOver, started, isPaused, doubleJumpTimer, airJumpsUsed) {
-                detectTapGestures {
-                    if (!started || gameOver) {
+            .pointerInput(gameOver, started, isPaused, doubleJumpTimer, airJumpsUsed, showStaticOverlay) {
+                detectTapGestures(onTap = { offset ->
+                    if (showStaticOverlay && canvasHeight > 0f && offset.y > canvasHeight - bannerTapGuardPx) {
+                        return@detectTapGestures
+                    }
+                    if (!started) {
+                        resetGame()
+                    } else if (gameOver) {
+                        completedRuns += 1
+                        prefs.edit().putInt("completed_runs", completedRuns).apply()
+                        if (activity != null) {
+                            adsManager.maybeShowInterstitial(
+                                activity = activity,
+                                completedRuns = completedRuns,
+                                frequencyCap = 4,
+                            )
+                        }
                         resetGame()
                     } else if (!isPaused) {
                         val floorY = canvasHeight - groundHeightPx - playerSize
@@ -273,7 +310,7 @@ fun GameScreen() {
                             playTone(ToneGenerator.TONE_PROP_BEEP, 60)
                         }
                     }
-                }
+                })
             },
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -707,12 +744,49 @@ fun GameScreen() {
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
+                if (!usedSecondChanceThisRun) {
+                    Text(
+                        text = if (adsManager.isRewardedReady) {
+                            "Watch ad for second chance"
+                        } else {
+                            "Second chance unavailable"
+                        },
+                        color = if (adsManager.isRewardedReady) Color(0xFFA1F28A) else Color.White.copy(alpha = 0.6f),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .background(
+                                if (adsManager.isRewardedReady) Color(0x3333AA66) else Color(0x22000000),
+                                CircleShape,
+                            )
+                            .clickable(enabled = adsManager.isRewardedReady && activity != null) {
+                                val host = activity ?: return@clickable
+                                val shown = adsManager.showRewarded(
+                                    activity = host,
+                                    onRewardEarned = { continueAfterReward() },
+                                    onAdClosed = {},
+                                )
+                                if (!shown) {
+                                    playTone(ToneGenerator.TONE_PROP_NACK, 60)
+                                }
+                            }
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                    )
+                }
                 Text(
                     text = "Tap to restart",
                     color = Color.White.copy(alpha = 0.85f),
                     fontSize = 14.sp,
                 )
             }
+        }
+
+        if (showStaticOverlay) {
+            RunnerBannerAd(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 12.dp),
+            )
         }
     }
 

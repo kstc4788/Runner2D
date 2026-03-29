@@ -23,18 +23,24 @@ The project is structured as an extendable base for gameplay loops, collision sy
   - Collect 3 power-ups
 - Game-over results panel with run stats
 - Sprite-like animated player rendering via Compose Canvas
+- Ads monetization skeleton:
+  - Banner on static screens (start/pause/game-over)
+  - Interstitial every 4 completed runs
+  - Rewarded ad for one second-chance revive per run
 
 ## Tech Stack
 
 - Kotlin 2.0
 - Jetpack Compose (Canvas rendering)
 - Android Gradle Plugin 8.9
+- Google Mobile Ads SDK (AdMob)
 - Min SDK 24, Target SDK 35
 
 ## Project Structure
 
-- `app/src/main/java/com/example/runner2d/MainActivity.kt`: app entry point
-- `app/src/main/java/com/example/runner2d/GameScreen.kt`: game loop, rendering, physics, input, power-ups, missions
+- `app/src/main/java/com/example/runner2d/MainActivity.kt`: app entry point + MobileAds init
+- `app/src/main/java/com/example/runner2d/GameScreen.kt`: game loop, rendering, physics, input, power-ups, missions, ads hooks
+- `app/src/main/java/com/example/runner2d/AdsManager.kt`: banner/interstitial/rewarded manager
 - `app/src/main/java/com/example/runner2d/ui/theme/*`: Compose theme setup
 
 ## Requirements
@@ -69,12 +75,20 @@ APK output:
 - `Tap` on start screen: start game
 - `Tap` on game over screen: restart game
 - `Pause button` (top-right): pause/resume + settings panel
+- `Watch ad for second chance` on game-over panel (if rewarded ad is loaded)
+
+## Ads Notes
+
+- The project currently uses Google official test ad unit IDs.
+- Before production release, replace test IDs with your own AdMob unit IDs.
+- Add consent flow (GDPR/EEA) and age handling before enabling live ads.
 
 ## Current Limitations
 
 - Art is still code-drawn (no external sprite atlas yet)
 - No online leaderboard yet
 - No cloud save/profile system yet
+- Consent UX not implemented yet (required for production monetization)
 
 ## Roadmap
 
@@ -82,6 +96,7 @@ APK output:
 - Add cosmetic unlocks tied to missions
 - Add leaderboard integration (Firebase)
 - Add release build pipeline + store-ready assets
+- Integrate consent SDK and remote-config ad tuning
 
 ## License
 
