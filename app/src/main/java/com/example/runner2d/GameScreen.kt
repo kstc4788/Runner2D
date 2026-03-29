@@ -295,12 +295,24 @@ fun GameScreen() {
     }
 
     fun spawnObstacleForWave(floorY: Float, difficulty: Float) {
-        val spawnX = canvasWidth + 24f
+        val estimatedSpeed = baseObstacleSpeed * difficulty
+        val minGapPx = (estimatedSpeed * 0.24f).coerceIn(105f, 185f)
+        val lastRight = obstacles.maxOfOrNull { it.x + it.width } ?: 0f
+        val spawnX = max(canvasWidth + 24f, lastRight + minGapPx)
+
+        val recent = obstacles.sortedByDescending { it.x }.take(2)
+        val recentGroundChain = recent.count { it.type != ObstacleType.DRONE }
         val roll = Random.nextFloat()
-        val type = when {
+        var type = when {
             roll < 0.42f -> ObstacleType.BLOCK_LOW
             roll < 0.8f -> ObstacleType.BLOCK_TALL
             else -> ObstacleType.DRONE
+        }
+        if (score < 55f && type == ObstacleType.BLOCK_TALL && Random.nextFloat() < 0.45f) {
+            type = ObstacleType.BLOCK_LOW
+        }
+        if (recentGroundChain >= 2) {
+            type = ObstacleType.DRONE
         }
         val obstacle = when (type) {
             ObstacleType.BLOCK_LOW -> {
@@ -321,9 +333,6 @@ fun GameScreen() {
             }
         }
         obstacles.add(obstacle)
-        if (difficulty > 1.55f && Random.nextFloat() < 0.34f) {
-            obstacles.add(obstacle.copy(x = spawnX + obstacle.width + Random.nextFloat() * 42f + 24f))
-        }
     }
 
     fun spawnImpactParticles(x: Float, y: Float, color: Color) {
@@ -484,10 +493,15 @@ fun GameScreen() {
                 waveTimer += dt
                 if (waveBurstLeft == 0 && waveTimer >= nextWaveIn) {
                     waveTimer = 0f
-                    nextWaveIn = (Random.nextFloat() * 0.9f + 1.1f - (difficulty - 1f) * 0.45f)
-                        .coerceIn(0.62f, 1.95f)
-                    val maxBurst = if (difficulty > 1.65f) 5 else 4
-                    waveBurstLeft = Random.nextInt(2, maxBurst + 1)
+                    val earlyGrace = if (score < 85f) 0.35f else 0f
+                    nextWaveIn = (Random.nextFloat() * 1.0f + 1.25f + earlyGrace - (difficulty - 1f) * 0.35f)
+                        .coerceIn(0.9f, 2.25f)
+                    val maxBurst = when {
+                        score < 85f -> 2
+                        difficulty > 1.7f -> 4
+                        else -> 3
+                    }
+                    waveBurstLeft = Random.nextInt(1, maxBurst + 1)
                     waveBurstCooldown = 0f
                 }
                 if (waveBurstLeft > 0) {
@@ -495,8 +509,8 @@ fun GameScreen() {
                     if (waveBurstCooldown <= 0f) {
                         spawnObstacleForWave(floorY, difficulty)
                         waveBurstLeft -= 1
-                        waveBurstCooldown = (Random.nextFloat() * 0.24f + 0.18f - (difficulty - 1f) * 0.06f)
-                            .coerceAtLeast(0.12f)
+                        waveBurstCooldown = (Random.nextFloat() * 0.32f + 0.26f - (difficulty - 1f) * 0.05f)
+                            .coerceAtLeast(0.2f)
                     }
                 }
 
