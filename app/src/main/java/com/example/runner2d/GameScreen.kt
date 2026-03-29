@@ -1,5 +1,12 @@
 ﻿package com.example.runner2d
 
+import android.content.Context
+import android.media.AudioManager
+import android.media.ToneGenerator
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -10,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -24,6 +32,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -38,8 +47,30 @@ data class Obstacle(
     val height: Float,
 )
 
+private fun vibrateGameOver(context: Context) {
+    val durationMs = 120L
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        val manager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+        manager.defaultVibrator.vibrate(
+            VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE),
+        )
+    } else {
+        @Suppress("DEPRECATION")
+        val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        vibrator.vibrate(durationMs)
+    }
+}
+
 @Composable
 fun GameScreen() {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("runner2d_prefs", Context.MODE_PRIVATE) }
+    val tone = remember { ToneGenerator(AudioManager.STREAM_MUSIC, 80) }
+
+    DisposableEffect(Unit) {
+        onDispose { tone.release() }
+    }
+
     val groundHeightPx = with(LocalDensity.current) { 100.dp.toPx() }
     val playerSize = with(LocalDensity.current) { 48.dp.toPx() }
 
@@ -58,7 +89,7 @@ fun GameScreen() {
     var nextSpawnIn by remember { mutableFloatStateOf(1.15f) }
 
     var score by remember { mutableFloatStateOf(0f) }
-    var bestScore by remember { mutableFloatStateOf(0f) }
+    var bestScore by remember { mutableFloatStateOf(prefs.getFloat("best_score", 0f)) }
     var started by remember { mutableStateOf(false) }
     var gameOver by remember { mutableStateOf(false) }
     var isPaused by remember { mutableStateOf(false) }
@@ -102,6 +133,7 @@ fun GameScreen() {
                         val floorY = canvasHeight - groundHeightPx - playerSize
                         if (playerY >= floorY - 1f) {
                             playerVelocity = jumpImpulse
+                            tone.startTone(ToneGenerator.TONE_PROP_BEEP2, 70)
                         }
                     }
                 }
@@ -165,6 +197,7 @@ fun GameScreen() {
                     if (playerRect.overlaps(obstacleRect)) {
                         gameOver = true
                         bestScore = max(bestScore, score)
+                        prefs.edit().putFloat("best_score", bestScore).apply()
                         break
                     }
                 }
@@ -293,6 +326,13 @@ fun GameScreen() {
         while (true) {
             frameTicker += 1f
             delay(16)
+        }
+    }
+
+    LaunchedEffect(gameOver) {
+        if (gameOver) {
+            tone.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 250)
+            vibrateGameOver(context)
         }
     }
 }
