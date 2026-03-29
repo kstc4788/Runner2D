@@ -43,6 +43,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.max
 import kotlin.math.sin
 import kotlin.random.Random
@@ -65,6 +68,47 @@ data class PowerUpItem(
     val radius: Float,
     val type: PowerUpType,
 )
+
+data class DailyProgress(
+    val dateKey: String,
+    val jumps: Int,
+    val powerups: Int,
+    val bestScore: Int,
+)
+
+private fun todayKey(): String {
+    val fmt = SimpleDateFormat("yyyyMMdd", Locale.US)
+    return fmt.format(Date())
+}
+
+private fun loadDailyProgress(prefs: android.content.SharedPreferences): DailyProgress {
+    val today = todayKey()
+    val savedDate = prefs.getString("daily_date", today) ?: today
+    return if (savedDate == today) {
+        DailyProgress(
+            dateKey = today,
+            jumps = prefs.getInt("daily_jumps", 0),
+            powerups = prefs.getInt("daily_powerups", 0),
+            bestScore = prefs.getInt("daily_best_score", 0),
+        )
+    } else {
+        val fresh = DailyProgress(today, 0, 0, 0)
+        saveDailyProgress(prefs, fresh)
+        fresh
+    }
+}
+
+private fun saveDailyProgress(
+    prefs: android.content.SharedPreferences,
+    progress: DailyProgress,
+) {
+    prefs.edit()
+        .putString("daily_date", progress.dateKey)
+        .putInt("daily_jumps", progress.jumps)
+        .putInt("daily_powerups", progress.powerups)
+        .putInt("daily_best_score", progress.bestScore)
+        .apply()
+}
 
 private fun vibrateGameOver(context: Context) {
     val durationMs = 120L
@@ -100,6 +144,27 @@ fun GameScreen() {
 
     var audioEnabled by remember { mutableStateOf(prefs.getBoolean("audio_enabled", true)) }
     var hapticsEnabled by remember { mutableStateOf(prefs.getBoolean("haptics_enabled", true)) }
+    var dailyProgress by remember { mutableStateOf(loadDailyProgress(prefs)) }
+
+    val missionScoreTarget = 120
+    val missionJumpsTarget = 25
+    val missionPowerupsTarget = 3
+
+    fun refreshDailyIfNeeded() {
+        val current = todayKey()
+        if (dailyProgress.dateKey != current) {
+            val fresh = DailyProgress(current, 0, 0, 0)
+            dailyProgress = fresh
+            saveDailyProgress(prefs, fresh)
+        }
+    }
+
+    fun updateDaily(transform: (DailyProgress) -> DailyProgress) {
+        refreshDailyIfNeeded()
+        val updated = transform(dailyProgress)
+        dailyProgress = updated
+        saveDailyProgress(prefs, updated)
+    }
 
     fun playTone(toneType: Int, durationMs: Int) {
         if (audioEnabled) tone.startTone(toneType, durationMs)
@@ -119,6 +184,9 @@ fun GameScreen() {
     var playerVelocity by remember { mutableFloatStateOf(0f) }
     var airJumpsUsed by remember { mutableIntStateOf(0) }
     var runningPhase by remember { mutableFloatStateOf(0f) }
+
+    var sessionJumps by remember { mutableIntStateOf(0) }
+    var sessionPowerups by remember { mutableIntStateOf(0) }
 
     val gravity = 2400f
     val jumpImpulse = -980f
@@ -156,6 +224,7 @@ fun GameScreen() {
     }
 
     fun resetGame() {
+        refreshDailyIfNeeded()
         obstacles.clear()
         powerUps.clear()
         spawnTimer = 0f
@@ -169,6 +238,8 @@ fun GameScreen() {
         playerVelocity = jumpImpulse * 0.6f
         airJumpsUsed = 0
         runningPhase = 0f
+        sessionJumps = 0
+        sessionPowerups = 0
         farLayerOffset = 0f
         nearLayerOffset = 0f
         cloudOffset = 0f
@@ -191,10 +262,14 @@ fun GameScreen() {
                         if (onGround) {
                             playerVelocity = jumpImpulse
                             airJumpsUsed = 0
+                            sessionJumps += 1
+                            updateDaily { it.copy(jumps = it.jumps + 1) }
                             playTone(ToneGenerator.TONE_PROP_BEEP2, 70)
                         } else if (doubleJumpTimer > 0f && airJumpsUsed < 1) {
                             playerVelocity = jumpImpulse * 0.92f
                             airJumpsUsed += 1
+                            sessionJumps += 1
+                            updateDaily { it.copy(jumps = it.jumps + 1) }
                             playTone(ToneGenerator.TONE_PROP_BEEP, 60)
                         }
                     }
@@ -284,6 +359,8 @@ fun GameScreen() {
                             PowerUpType.SLOW_MO -> slowMoTimer = 5f
                             PowerUpType.DOUBLE_JUMP -> doubleJumpTimer = 10f
                         }
+                        sessionPowerups += 1
+                        updateDaily { it.copy(powerups = it.powerups + 1) }
                         playTone(ToneGenerator.TONE_PROP_ACK, 70)
                         collected.add(item)
                     }
@@ -317,6 +394,10 @@ fun GameScreen() {
                 }
 
                 score += dt * 10f * (1f + (difficulty - 1f) * 0.4f)
+                val scoreInt = score.toInt()
+                if (scoreInt > dailyProgress.bestScore) {
+                    updateDaily { it.copy(bestScore = scoreInt) }
+                }
             }
 
             drawRect(color = Color(0xFF0E1C2F), size = size)
@@ -459,6 +540,11 @@ fun GameScreen() {
             }
         }
 
+        val missionScoreDone = dailyProgress.bestScore >= missionScoreTarget
+        val missionJumpsDone = dailyProgress.jumps >= missionJumpsTarget
+        val missionPowerupsDone = dailyProgress.powerups >= missionPowerupsTarget
+        val missionsDone = listOf(missionScoreDone, missionJumpsDone, missionPowerupsDone).count { it }
+
         Text(
             text = "Score: ${score.toInt()}  Best: ${bestScore.toInt()}",
             color = Color.White,
@@ -516,9 +602,28 @@ fun GameScreen() {
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    text = "Power-ups: Shield / Slow / Double Jump",
-                    color = Color.White.copy(alpha = 0.85f),
-                    fontSize = 14.sp,
+                    text = "Daily missions: $missionsDone/3",
+                    color = Color.White.copy(alpha = 0.9f),
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = "Score $missionScoreTarget (${dailyProgress.bestScore}/$missionScoreTarget)"
+                        .let { if (missionScoreDone) "✓ $it" else "• $it" },
+                    color = Color.White.copy(alpha = 0.8f),
+                    fontSize = 13.sp,
+                )
+                Text(
+                    text = "Jumps $missionJumpsTarget (${dailyProgress.jumps}/$missionJumpsTarget)"
+                        .let { if (missionJumpsDone) "✓ $it" else "• $it" },
+                    color = Color.White.copy(alpha = 0.8f),
+                    fontSize = 13.sp,
+                )
+                Text(
+                    text = "Power-ups $missionPowerupsTarget (${dailyProgress.powerups}/$missionPowerupsTarget)"
+                        .let { if (missionPowerupsDone) "✓ $it" else "• $it" },
+                    color = Color.White.copy(alpha = 0.8f),
+                    fontSize = 13.sp,
                 )
             }
         } else if (isPaused) {
@@ -572,16 +677,42 @@ fun GameScreen() {
                             .padding(horizontal = 14.dp, vertical = 8.dp),
                     )
                 }
+                Text(
+                    text = "Daily missions: $missionsDone/3",
+                    color = Color.White.copy(alpha = 0.85f),
+                    fontSize = 14.sp,
+                )
             }
         } else if (gameOver) {
-            Text(
-                text = "Game Over\nTap to restart",
-                color = Color.White,
-                fontSize = 28.sp,
-                lineHeight = 34.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.align(Alignment.Center),
-            )
+            Column(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .background(Color(0x77212D40), shape = CircleShape)
+                    .padding(horizontal = 24.dp, vertical = 18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = "Game Over",
+                    color = Color.White,
+                    fontSize = 30.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(text = "Run score: ${score.toInt()}", color = Color.White, fontSize = 16.sp)
+                Text(text = "Jumps: $sessionJumps", color = Color.White, fontSize = 14.sp)
+                Text(text = "Power-ups: $sessionPowerups", color = Color.White, fontSize = 14.sp)
+                Text(
+                    text = "Daily missions: $missionsDone/3",
+                    color = Color(0xFFD7F6FF),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = "Tap to restart",
+                    color = Color.White.copy(alpha = 0.85f),
+                    fontSize = 14.sp,
+                )
+            }
         }
     }
 

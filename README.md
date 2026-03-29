@@ -17,6 +17,11 @@ The project is structured as an extendable base for gameplay loops, collision sy
   - Shield (absorbs one hit)
   - Slow Motion (temporary speed reduction)
   - Double Jump (temporary air-jump unlock)
+- Daily mission system (3 missions):
+  - Reach score 120
+  - Perform 25 jumps
+  - Collect 3 power-ups
+- Game-over results panel with run stats
 - Sprite-like animated player rendering via Compose Canvas
 
 ## Tech Stack
@@ -29,7 +34,7 @@ The project is structured as an extendable base for gameplay loops, collision sy
 ## Project Structure
 
 - `app/src/main/java/com/example/runner2d/MainActivity.kt`: app entry point
-- `app/src/main/java/com/example/runner2d/GameScreen.kt`: game loop, rendering, physics, input, power-ups
+- `app/src/main/java/com/example/runner2d/GameScreen.kt`: game loop, rendering, physics, input, power-ups, missions
 - `app/src/main/java/com/example/runner2d/ui/theme/*`: Compose theme setup
 
 ## Requirements
@@ -74,7 +79,7 @@ APK output:
 ## Roadmap
 
 - Replace procedural shapes with sprite sheets and frame animations
-- Add mission system and cosmetic unlocks
+- Add cosmetic unlocks tied to missions
 - Add leaderboard integration (Firebase)
 - Add release build pipeline + store-ready assets
 
