@@ -24,12 +24,14 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
@@ -42,12 +44,26 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlin.math.max
+import kotlin.math.sin
 import kotlin.random.Random
 
 data class Obstacle(
     var x: Float,
     val width: Float,
     val height: Float,
+)
+
+enum class PowerUpType {
+    SHIELD,
+    SLOW_MO,
+    DOUBLE_JUMP,
+}
+
+data class PowerUpItem(
+    var x: Float,
+    val y: Float,
+    val radius: Float,
+    val type: PowerUpType,
 )
 
 private fun vibrateGameOver(context: Context) {
@@ -66,6 +82,14 @@ private fun vibrateGameOver(context: Context) {
             vibrator.vibrate(durationMs)
         }
     }
+}
+
+private fun circleIntersectsRect(cx: Float, cy: Float, radius: Float, rect: Rect): Boolean {
+    val nearestX = cx.coerceIn(rect.left, rect.right)
+    val nearestY = cy.coerceIn(rect.top, rect.bottom)
+    val dx = cx - nearestX
+    val dy = cy - nearestY
+    return dx * dx + dy * dy <= radius * radius
 }
 
 @Composable
@@ -93,6 +117,8 @@ fun GameScreen() {
 
     var playerY by remember { mutableFloatStateOf(0f) }
     var playerVelocity by remember { mutableFloatStateOf(0f) }
+    var airJumpsUsed by remember { mutableIntStateOf(0) }
+    var runningPhase by remember { mutableFloatStateOf(0f) }
 
     val gravity = 2400f
     val jumpImpulse = -980f
@@ -101,6 +127,14 @@ fun GameScreen() {
     val obstacles = remember { mutableStateListOf<Obstacle>() }
     var spawnTimer by remember { mutableFloatStateOf(0f) }
     var nextSpawnIn by remember { mutableFloatStateOf(1.15f) }
+
+    val powerUps = remember { mutableStateListOf<PowerUpItem>() }
+    var powerSpawnTimer by remember { mutableFloatStateOf(0f) }
+    var nextPowerSpawnIn by remember { mutableFloatStateOf(6.0f) }
+
+    var shieldTimer by remember { mutableFloatStateOf(0f) }
+    var slowMoTimer by remember { mutableFloatStateOf(0f) }
+    var doubleJumpTimer by remember { mutableFloatStateOf(0f) }
 
     var score by remember { mutableFloatStateOf(0f) }
     var bestScore by remember { mutableFloatStateOf(prefs.getFloat("best_score", 0f)) }
@@ -123,31 +157,45 @@ fun GameScreen() {
 
     fun resetGame() {
         obstacles.clear()
+        powerUps.clear()
         spawnTimer = 0f
         nextSpawnIn = 1.15f
+        powerSpawnTimer = 0f
+        nextPowerSpawnIn = 6.0f
         score = 0f
         gameOver = false
         isPaused = false
         started = true
         playerVelocity = jumpImpulse * 0.6f
+        airJumpsUsed = 0
+        runningPhase = 0f
         farLayerOffset = 0f
         nearLayerOffset = 0f
         cloudOffset = 0f
+        shieldTimer = 0f
+        slowMoTimer = 0f
+        doubleJumpTimer = 0f
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF0E1C2F))
-            .pointerInput(gameOver, started, isPaused) {
+            .pointerInput(gameOver, started, isPaused, doubleJumpTimer, airJumpsUsed) {
                 detectTapGestures {
                     if (!started || gameOver) {
                         resetGame()
                     } else if (!isPaused) {
                         val floorY = canvasHeight - groundHeightPx - playerSize
-                        if (playerY >= floorY - 1f) {
+                        val onGround = playerY >= floorY - 1f
+                        if (onGround) {
                             playerVelocity = jumpImpulse
+                            airJumpsUsed = 0
                             playTone(ToneGenerator.TONE_PROP_BEEP2, 70)
+                        } else if (doubleJumpTimer > 0f && airJumpsUsed < 1) {
+                            playerVelocity = jumpImpulse * 0.92f
+                            airJumpsUsed += 1
+                            playTone(ToneGenerator.TONE_PROP_BEEP, 60)
                         }
                     }
                 }
@@ -164,10 +212,15 @@ fun GameScreen() {
             }
 
             val difficulty = 1f + (score / 180f).coerceAtMost(0.95f)
-            val obstacleSpeed = baseObstacleSpeed * difficulty
+            val slowMoFactor = if (slowMoTimer > 0f) 0.65f else 1f
+            val obstacleSpeed = baseObstacleSpeed * difficulty * slowMoFactor
 
             if (started && !gameOver && !isPaused) {
                 val dt = 1f / 60f
+
+                if (shieldTimer > 0f) shieldTimer = max(0f, shieldTimer - dt)
+                if (slowMoTimer > 0f) slowMoTimer = max(0f, slowMoTimer - dt)
+                if (doubleJumpTimer > 0f) doubleJumpTimer = max(0f, doubleJumpTimer - dt)
 
                 playerVelocity += gravity * dt
                 playerY += playerVelocity * dt
@@ -175,6 +228,11 @@ fun GameScreen() {
                 if (playerY > floorY) {
                     playerY = floorY
                     playerVelocity = 0f
+                    airJumpsUsed = 0
+                }
+
+                if (playerY >= floorY - 1f) {
+                    runningPhase += dt * (12f * difficulty)
                 }
 
                 farLayerOffset = (farLayerOffset + 28f * dt * difficulty) % size.width
@@ -191,8 +249,25 @@ fun GameScreen() {
                     nextSpawnIn = (1.10f - (score / 280f).coerceAtMost(0.45f) + jitter).coerceAtLeast(0.45f)
                 }
 
+                powerSpawnTimer += dt
+                if (powerSpawnTimer >= nextPowerSpawnIn) {
+                    powerSpawnTimer = 0f
+                    nextPowerSpawnIn = Random.nextFloat() * 3.5f + 5.2f
+                    val roll = Random.nextFloat()
+                    val type = when {
+                        roll < 0.38f -> PowerUpType.SHIELD
+                        roll < 0.70f -> PowerUpType.SLOW_MO
+                        else -> PowerUpType.DOUBLE_JUMP
+                    }
+                    val y = floorY - (Random.nextFloat() * 110f + 30f)
+                    powerUps.add(PowerUpItem(size.width + 40f, y, 14f, type))
+                }
+
                 obstacles.forEach { it.x -= obstacleSpeed * dt }
                 obstacles.removeAll { it.x + it.width < -20f }
+
+                powerUps.forEach { it.x -= obstacleSpeed * dt }
+                powerUps.removeAll { it.x + it.radius < -20f }
 
                 val playerRect = Rect(
                     left = size.width * 0.2f,
@@ -201,6 +276,21 @@ fun GameScreen() {
                     bottom = playerY + playerSize,
                 )
 
+                val collected = mutableListOf<PowerUpItem>()
+                for (item in powerUps) {
+                    if (circleIntersectsRect(item.x, item.y, item.radius, playerRect)) {
+                        when (item.type) {
+                            PowerUpType.SHIELD -> shieldTimer = 8f
+                            PowerUpType.SLOW_MO -> slowMoTimer = 5f
+                            PowerUpType.DOUBLE_JUMP -> doubleJumpTimer = 10f
+                        }
+                        playTone(ToneGenerator.TONE_PROP_ACK, 70)
+                        collected.add(item)
+                    }
+                }
+                powerUps.removeAll(collected)
+
+                var hitObstacle: Obstacle? = null
                 for (obstacle in obstacles) {
                     val obstacleRect = Rect(
                         left = obstacle.x,
@@ -209,10 +299,20 @@ fun GameScreen() {
                         bottom = size.height - groundHeightPx,
                     )
                     if (playerRect.overlaps(obstacleRect)) {
+                        hitObstacle = obstacle
+                        break
+                    }
+                }
+
+                if (hitObstacle != null) {
+                    if (shieldTimer > 0f) {
+                        shieldTimer = 0f
+                        obstacles.remove(hitObstacle)
+                        playTone(ToneGenerator.TONE_PROP_NACK, 80)
+                    } else {
                         gameOver = true
                         bestScore = max(bestScore, score)
                         prefs.edit().putFloat("best_score", bestScore).apply()
-                        break
                     }
                 }
 
@@ -261,23 +361,101 @@ fun GameScreen() {
                 size = Size(size.width, groundHeightPx),
             )
 
-            drawRect(
+            val playerX = size.width * 0.2f
+            val bodyY = playerY + playerSize * 0.25f
+            val legHeight = playerSize * 0.22f
+            val legPhase = if (playerY >= floorY - 1f) sin(runningPhase) else 0f
+            val legOffset = legPhase * (playerSize * 0.08f)
+
+            drawRoundRect(
+                color = Color(0xFF57C57A),
+                topLeft = Offset(playerX + playerSize * 0.14f, bodyY),
+                size = Size(playerSize * 0.72f, playerSize * 0.55f),
+                cornerRadius = CornerRadius(12f, 12f),
+            )
+            drawCircle(
                 color = Color(0xFF6FD08C),
-                topLeft = Offset(size.width * 0.2f, playerY),
-                size = Size(playerSize, playerSize),
+                radius = playerSize * 0.20f,
+                center = Offset(playerX + playerSize * 0.52f, playerY + playerSize * 0.21f),
             )
             drawCircle(
                 color = Color(0xFF0E1C2F),
-                radius = 3.5f,
-                center = Offset(size.width * 0.2f + playerSize * 0.72f, playerY + playerSize * 0.32f),
+                radius = 3.4f,
+                center = Offset(playerX + playerSize * 0.59f, playerY + playerSize * 0.20f),
+            )
+            drawRoundRect(
+                color = Color(0xFF2E8A57),
+                topLeft = Offset(playerX + playerSize * 0.23f + legOffset, playerY + playerSize * 0.78f),
+                size = Size(playerSize * 0.15f, legHeight),
+                cornerRadius = CornerRadius(6f, 6f),
+            )
+            drawRoundRect(
+                color = Color(0xFF2E8A57),
+                topLeft = Offset(playerX + playerSize * 0.55f - legOffset, playerY + playerSize * 0.78f),
+                size = Size(playerSize * 0.15f, legHeight),
+                cornerRadius = CornerRadius(6f, 6f),
             )
 
+            if (shieldTimer > 0f) {
+                drawCircle(
+                    color = Color(0x557DE2FF),
+                    radius = playerSize * 0.72f,
+                    center = Offset(playerX + playerSize * 0.5f, playerY + playerSize * 0.5f),
+                )
+            }
+
             obstacles.forEach { obstacle ->
-                drawRect(
+                drawRoundRect(
                     color = Color(0xFFFF6B6B),
                     topLeft = Offset(obstacle.x, size.height - groundHeightPx - obstacle.height),
                     size = Size(obstacle.width, obstacle.height),
+                    cornerRadius = CornerRadius(8f, 8f),
                 )
+            }
+
+            powerUps.forEach { item ->
+                val color = when (item.type) {
+                    PowerUpType.SHIELD -> Color(0xFF7DE2FF)
+                    PowerUpType.SLOW_MO -> Color(0xFFFFC857)
+                    PowerUpType.DOUBLE_JUMP -> Color(0xFFA1F28A)
+                }
+                drawCircle(color = color, radius = item.radius, center = Offset(item.x, item.y))
+                when (item.type) {
+                    PowerUpType.SHIELD -> {
+                        drawCircle(
+                            color = Color(0xAA0E1C2F),
+                            radius = item.radius * 0.45f,
+                            center = Offset(item.x, item.y),
+                        )
+                    }
+                    PowerUpType.SLOW_MO -> {
+                        drawCircle(
+                            color = Color(0xAA0E1C2F),
+                            radius = item.radius * 0.16f,
+                            center = Offset(item.x, item.y),
+                        )
+                        drawRoundRect(
+                            color = Color(0xAA0E1C2F),
+                            topLeft = Offset(item.x - 1.3f, item.y - item.radius * 0.58f),
+                            size = Size(2.6f, item.radius * 0.56f),
+                            cornerRadius = CornerRadius(2f, 2f),
+                        )
+                    }
+                    PowerUpType.DOUBLE_JUMP -> {
+                        drawRoundRect(
+                            color = Color(0xAA0E1C2F),
+                            topLeft = Offset(item.x - item.radius * 0.56f, item.y + 2f),
+                            size = Size(item.radius * 1.12f, 3.2f),
+                            cornerRadius = CornerRadius(2f, 2f),
+                        )
+                        drawRoundRect(
+                            color = Color(0xAA0E1C2F),
+                            topLeft = Offset(item.x - item.radius * 0.26f, item.y - item.radius * 0.26f),
+                            size = Size(item.radius * 0.52f, 3.2f),
+                            cornerRadius = CornerRadius(2f, 2f),
+                        )
+                    }
+                }
             }
         }
 
@@ -290,6 +468,24 @@ fun GameScreen() {
             fontSize = 21.sp,
             fontWeight = FontWeight.Bold,
         )
+
+        val activePowerups = buildList {
+            if (shieldTimer > 0f) add("Shield ${(shieldTimer + 0.5f).toInt()}s")
+            if (slowMoTimer > 0f) add("Slow ${(slowMoTimer + 0.5f).toInt()}s")
+            if (doubleJumpTimer > 0f) add("2x Jump ${(doubleJumpTimer + 0.5f).toInt()}s")
+        }.joinToString("  |  ")
+
+        if (activePowerups.isNotEmpty() && started && !gameOver) {
+            Text(
+                text = activePowerups,
+                color = Color(0xFFD7F6FF),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 62.dp),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+            )
+        }
 
         if (started && !gameOver) {
             Text(
@@ -320,8 +516,8 @@ fun GameScreen() {
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    text = "Audio: ${if (audioEnabled) "ON" else "OFF"}  |  Haptics: ${if (hapticsEnabled) "ON" else "OFF"}",
-                    color = Color.White.copy(alpha = 0.8f),
+                    text = "Power-ups: Shield / Slow / Double Jump",
+                    color = Color.White.copy(alpha = 0.85f),
                     fontSize = 14.sp,
                 )
             }
