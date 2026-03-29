@@ -8,10 +8,15 @@ The project is structured as an extendable base for gameplay loops, collision sy
 - Tap-to-jump gameplay
 - Procedural obstacle spawning
 - Collision detection and game over state
+- Multi-type obstacles with wave-based spawn pacing
 - Score + persistent best score tracking
 - Progressive difficulty scaling
 - Parallax background layers (stars, hills, clouds)
 - Pause / resume controls
+- Game-feel upgrades:
+  - Coyote time + jump buffer
+  - Camera shake on impacts
+  - Hit particle effects
 - In-game toggles: audio ON/OFF, haptics ON/OFF (persisted)
 - Power-ups:
   - Shield (absorbs one hit)
