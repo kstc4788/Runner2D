@@ -11,7 +11,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
@@ -57,7 +60,11 @@ private fun vibrateGameOver(context: Context) {
     } else {
         @Suppress("DEPRECATION")
         val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-        vibrator.vibrate(durationMs)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            vibrator.vibrate(VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE))
+        } else {
+            vibrator.vibrate(durationMs)
+        }
     }
 }
 
@@ -66,6 +73,13 @@ fun GameScreen() {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("runner2d_prefs", Context.MODE_PRIVATE) }
     val tone = remember { ToneGenerator(AudioManager.STREAM_MUSIC, 80) }
+
+    var audioEnabled by remember { mutableStateOf(prefs.getBoolean("audio_enabled", true)) }
+    var hapticsEnabled by remember { mutableStateOf(prefs.getBoolean("haptics_enabled", true)) }
+
+    fun playTone(toneType: Int, durationMs: Int) {
+        if (audioEnabled) tone.startTone(toneType, durationMs)
+    }
 
     DisposableEffect(Unit) {
         onDispose { tone.release() }
@@ -133,7 +147,7 @@ fun GameScreen() {
                         val floorY = canvasHeight - groundHeightPx - playerSize
                         if (playerY >= floorY - 1f) {
                             playerVelocity = jumpImpulse
-                            tone.startTone(ToneGenerator.TONE_PROP_BEEP2, 70)
+                            playTone(ToneGenerator.TONE_PROP_BEEP2, 70)
                         }
                     }
                 }
@@ -293,23 +307,76 @@ fun GameScreen() {
         }
 
         if (!started) {
-            Text(
-                text = "Runner2D\nTap to start",
-                color = Color.White,
-                fontSize = 30.sp,
-                lineHeight = 36.sp,
-                fontWeight = FontWeight.Bold,
+            Column(
                 modifier = Modifier.align(Alignment.Center),
-            )
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    text = "Runner2D\nTap to start",
+                    color = Color.White,
+                    fontSize = 30.sp,
+                    lineHeight = 36.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = "Audio: ${if (audioEnabled) "ON" else "OFF"}  |  Haptics: ${if (hapticsEnabled) "ON" else "OFF"}",
+                    color = Color.White.copy(alpha = 0.8f),
+                    fontSize = 14.sp,
+                )
+            }
         } else if (isPaused) {
-            Text(
-                text = "Paused\nTap ▶ to resume",
-                color = Color.White,
-                fontSize = 28.sp,
-                lineHeight = 34.sp,
-                fontWeight = FontWeight.Bold,
+            Column(
                 modifier = Modifier.align(Alignment.Center),
-            )
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Text(
+                    text = "Paused",
+                    color = Color.White,
+                    fontSize = 32.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = "Tap ▶ to resume",
+                    color = Color.White,
+                    fontSize = 18.sp,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = "Audio ${if (audioEnabled) "ON" else "OFF"}",
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .background(
+                                if (audioEnabled) Color(0x446FD08C) else Color(0x44FF6B6B),
+                                CircleShape,
+                            )
+                            .clickable {
+                                audioEnabled = !audioEnabled
+                                prefs.edit().putBoolean("audio_enabled", audioEnabled).apply()
+                            }
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                    )
+                    Text(
+                        text = "Haptics ${if (hapticsEnabled) "ON" else "OFF"}",
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .background(
+                                if (hapticsEnabled) Color(0x446FD08C) else Color(0x44FF6B6B),
+                                CircleShape,
+                            )
+                            .clickable {
+                                hapticsEnabled = !hapticsEnabled
+                                prefs.edit().putBoolean("haptics_enabled", hapticsEnabled).apply()
+                            }
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                    )
+                }
+            }
         } else if (gameOver) {
             Text(
                 text = "Game Over\nTap to restart",
@@ -331,8 +398,10 @@ fun GameScreen() {
 
     LaunchedEffect(gameOver) {
         if (gameOver) {
-            tone.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 250)
-            vibrateGameOver(context)
+            playTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 250)
+            if (hapticsEnabled) {
+                vibrateGameOver(context)
+            }
         }
     }
 }
