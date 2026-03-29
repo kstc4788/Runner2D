@@ -1,0 +1,22 @@
+# Android / IntelliJ
+.idea/
+*.iml
+
+# Gradle
+.gradle/
+build/
+**/build/
+
+# Local machine config
+local.properties
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# JVM dumps
+*.hprof
+
