@@ -71,6 +71,16 @@ enum class PowerUpType {
     DOUBLE_JUMP,
 }
 
+enum class Sfx {
+    JUMP,
+    DOUBLE_JUMP,
+    PICKUP,
+    SHIELD_BREAK,
+    GAME_OVER,
+    REVIVE,
+    UI_TAP,
+}
+
 data class PowerUpItem(
     var x: Float,
     val y: Float,
@@ -172,6 +182,7 @@ fun GameScreen() {
 
     var audioEnabled by remember { mutableStateOf(prefs.getBoolean("audio_enabled", true)) }
     var hapticsEnabled by remember { mutableStateOf(prefs.getBoolean("haptics_enabled", true)) }
+    var tutorialVisible by remember { mutableStateOf(!prefs.getBoolean("tutorial_seen", false)) }
     var dailyProgress by remember { mutableStateOf(loadDailyProgress(prefs)) }
     var completedRuns by remember { mutableIntStateOf(prefs.getInt("completed_runs", 0)) }
     var usedSecondChanceThisRun by remember { mutableStateOf(false) }
@@ -196,8 +207,17 @@ fun GameScreen() {
         saveDailyProgress(prefs, updated)
     }
 
-    fun playTone(toneType: Int, durationMs: Int) {
-        if (audioEnabled) tone.startTone(toneType, durationMs)
+    fun playSfx(sfx: Sfx) {
+        if (!audioEnabled) return
+        when (sfx) {
+            Sfx.JUMP -> tone.startTone(ToneGenerator.TONE_PROP_BEEP2, 70)
+            Sfx.DOUBLE_JUMP -> tone.startTone(ToneGenerator.TONE_PROP_BEEP, 65)
+            Sfx.PICKUP -> tone.startTone(ToneGenerator.TONE_PROP_ACK, 70)
+            Sfx.SHIELD_BREAK -> tone.startTone(ToneGenerator.TONE_PROP_NACK, 90)
+            Sfx.GAME_OVER -> tone.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 250)
+            Sfx.REVIVE -> tone.startTone(ToneGenerator.TONE_PROP_ACK, 90)
+            Sfx.UI_TAP -> tone.startTone(ToneGenerator.TONE_PROP_BEEP, 40)
+        }
     }
 
     DisposableEffect(Unit) {
@@ -271,7 +291,7 @@ fun GameScreen() {
         shieldTimer = max(shieldTimer, 2.5f)
         val playerFrontX = canvasWidth * 0.2f + playerSize + 40f
         obstacles.removeAll { it.x < playerFrontX }
-        playTone(ToneGenerator.TONE_PROP_ACK, 80)
+        playSfx(Sfx.REVIVE)
     }
 
     fun spawnObstacleForWave(floorY: Float, difficulty: Float) {
@@ -372,6 +392,12 @@ fun GameScreen() {
                         return@detectTapGestures
                     }
                     if (!started) {
+                        if (tutorialVisible) {
+                            tutorialVisible = false
+                            prefs.edit().putBoolean("tutorial_seen", true).apply()
+                            playSfx(Sfx.UI_TAP)
+                            return@detectTapGestures
+                        }
                         resetGame()
                     } else if (gameOver) {
                         completedRuns += 1
@@ -400,7 +426,9 @@ fun GameScreen() {
                 playerY = floorY
             }
 
-            val difficulty = 1f + (score / 180f).coerceAtMost(0.95f)
+            val earlyRamp = (score / 220f).coerceAtMost(1.2f)
+            val lateRamp = ((score - 220f).coerceAtLeast(0f) / 300f).coerceAtMost(0.65f)
+            val difficulty = 1f + earlyRamp * 0.55f + lateRamp
             val slowMoFactor = if (slowMoTimer > 0f) 0.65f else 1f
             val obstacleSpeed = baseObstacleSpeed * difficulty * slowMoFactor
 
@@ -425,10 +453,10 @@ fun GameScreen() {
                     playerVelocity = if (canAirJump && !canGroundJump) jumpImpulse * 0.92f else jumpImpulse
                     if (canAirJump && !canGroundJump) {
                         airJumpsUsed += 1
-                        playTone(ToneGenerator.TONE_PROP_BEEP, 60)
+                        playSfx(Sfx.DOUBLE_JUMP)
                     } else {
                         airJumpsUsed = 0
-                        playTone(ToneGenerator.TONE_PROP_BEEP2, 70)
+                        playSfx(Sfx.JUMP)
                     }
                     sessionJumps += 1
                     updateDaily { it.copy(jumps = it.jumps + 1) }
@@ -456,8 +484,10 @@ fun GameScreen() {
                 waveTimer += dt
                 if (waveBurstLeft == 0 && waveTimer >= nextWaveIn) {
                     waveTimer = 0f
-                    nextWaveIn = (Random.nextFloat() * 1.3f + 1.05f).coerceAtLeast(0.8f)
-                    waveBurstLeft = Random.nextInt(2, 5)
+                    nextWaveIn = (Random.nextFloat() * 0.9f + 1.1f - (difficulty - 1f) * 0.45f)
+                        .coerceIn(0.62f, 1.95f)
+                    val maxBurst = if (difficulty > 1.65f) 5 else 4
+                    waveBurstLeft = Random.nextInt(2, maxBurst + 1)
                     waveBurstCooldown = 0f
                 }
                 if (waveBurstLeft > 0) {
@@ -465,7 +495,8 @@ fun GameScreen() {
                     if (waveBurstCooldown <= 0f) {
                         spawnObstacleForWave(floorY, difficulty)
                         waveBurstLeft -= 1
-                        waveBurstCooldown = Random.nextFloat() * 0.28f + 0.22f
+                        waveBurstCooldown = (Random.nextFloat() * 0.24f + 0.18f - (difficulty - 1f) * 0.06f)
+                            .coerceAtLeast(0.12f)
                     }
                 }
 
@@ -514,7 +545,7 @@ fun GameScreen() {
                         }
                         sessionPowerups += 1
                         updateDaily { it.copy(powerups = it.powerups + 1) }
-                        playTone(ToneGenerator.TONE_PROP_ACK, 70)
+                        playSfx(Sfx.PICKUP)
                         collected.add(item)
                     }
                 }
@@ -544,7 +575,7 @@ fun GameScreen() {
                         )
                         obstacles.remove(hitObstacle)
                         cameraShakeTimer = max(cameraShakeTimer, 0.14f)
-                        playTone(ToneGenerator.TONE_PROP_NACK, 80)
+                        playSfx(Sfx.SHIELD_BREAK)
                     } else {
                         gameOver = true
                         spawnImpactParticles(
@@ -826,6 +857,43 @@ fun GameScreen() {
                     color = Color.White.copy(alpha = 0.8f),
                     fontSize = 13.sp,
                 )
+                if (tutorialVisible) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier
+                            .background(Color(0x66212D40), CircleShape)
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                    ) {
+                        Text(
+                            text = "Quick Tutorial",
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = "• Tap to jump",
+                            color = Color.White.copy(alpha = 0.9f),
+                            fontSize = 12.sp,
+                        )
+                        Text(
+                            text = "• Yellow pickup = slow motion",
+                            color = Color.White.copy(alpha = 0.9f),
+                            fontSize = 12.sp,
+                        )
+                        Text(
+                            text = "• Blue shield absorbs one hit",
+                            color = Color.White.copy(alpha = 0.9f),
+                            fontSize = 12.sp,
+                        )
+                        Text(
+                            text = "Tap anywhere to close tutorial",
+                            color = Color(0xFFA1F28A),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                }
             }
         } else if (isPaused) {
             Column(
@@ -883,6 +951,20 @@ fun GameScreen() {
                     color = Color.White.copy(alpha = 0.85f),
                     fontSize = 14.sp,
                 )
+                Text(
+                    text = "Show Tutorial",
+                    color = Color(0xFFA1F28A),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .background(Color(0x33212D40), CircleShape)
+                        .clickable {
+                            tutorialVisible = true
+                            started = false
+                            isPaused = false
+                        }
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                )
             }
         } else if (gameOver) {
             Column(
@@ -931,7 +1013,7 @@ fun GameScreen() {
                                     onAdClosed = {},
                                 )
                                 if (!shown) {
-                                    playTone(ToneGenerator.TONE_PROP_NACK, 60)
+                                    playSfx(Sfx.UI_TAP)
                                 }
                             }
                             .padding(horizontal = 14.dp, vertical = 8.dp),
@@ -963,7 +1045,7 @@ fun GameScreen() {
 
     LaunchedEffect(gameOver) {
         if (gameOver) {
-            playTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 250)
+            playSfx(Sfx.GAME_OVER)
             if (hapticsEnabled) {
                 vibrateGameOver(context)
             }

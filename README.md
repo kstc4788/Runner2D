@@ -17,6 +17,8 @@ The project is structured as an extendable base for gameplay loops, collision sy
   - Coyote time + jump buffer
   - Camera shake on impacts
   - Hit particle effects
+- First-run tutorial overlay (reopenable from pause menu)
+- Distinct event-based SFX mapping (jump, pickup, shield break, revive, game over)
 - In-game toggles: audio ON/OFF, haptics ON/OFF (persisted)
 - Power-ups:
   - Shield (absorbs one hit)
